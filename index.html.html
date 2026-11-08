@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Sähkö">
+<meta name="theme-color" content="#101820">
+<title>Pörssisähkö</title>
+<link rel="apple-touch-icon" id="ico">
+<style>
+:root{--bg:#101820;--card:#1b2631;--tx:#eef2f5;--mut:#8fa1b0;--c:#22c55e;box-sizing:border-box}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--tx);font-family:"Avenir Next","Trebuchet MS",-apple-system,sans-serif}
+body{padding:calc(env(safe-area-inset-top,0px) + 14px) 14px calc(env(safe-area-inset-bottom,0px) + 24px);max-width:520px;margin:0 auto}
+.hero{border-radius:22px;padding:22px 20px;background:var(--c);color:#0b1117;transition:background .6s}
+.hero .lbl{font-size:17px;font-weight:700;opacity:.8}
+.hero .big{font-size:64px;font-weight:800;line-height:1.05;letter-spacing:-2px;margin:4px 0}
+.hero .big small{font-size:20px;font-weight:600;letter-spacing:0;margin-left:6px}
+.hero .nx{font-size:15px;font-weight:600;opacity:.85}
+h2{font-size:15px;margin:22px 4px 8px;color:var(--mut);font-weight:600}
+.card{background:var(--card);border-radius:16px;padding:14px 16px;margin-bottom:10px}
+.task{display:flex;gap:12px;align-items:center}
+.dot{width:14px;height:14px;border-radius:50%;flex:none;background:var(--mut)}
+.task b{display:block;font-size:17px}
+.task span{font-size:14px;color:var(--mut)}
+#chart{display:flex;align-items:flex-end;gap:2px;height:120px}
+#chart i{flex:1;border-radius:3px 3px 0 0;min-height:4px;opacity:.55}
+#chart i.now{opacity:1;outline:2px solid #fff;outline-offset:1px}
+#axis{display:flex;justify-content:space-between;font-size:11px;color:var(--mut);margin-top:6px}
+.st{font-size:12px;color:var(--mut);text-align:center;margin-top:14px}
+details{background:var(--card);border-radius:16px;padding:12px 16px;margin-top:14px}
+summary{font-weight:600;font-size:15px}
+label{display:block;font-size:13px;color:var(--mut);margin:12px 0 4px}
+input,select,textarea{width:100%;font:inherit;font-size:16px;padding:9px 10px;border-radius:10px;border:1px solid #33465a;background:#121b24;color:var(--tx)}
+.row{display:flex;gap:8px}.row>*{flex:1}
+button{font:inherit;font-size:15px;font-weight:600;padding:10px 12px;border-radius:10px;border:0;background:#2f4559;color:var(--tx);margin-top:10px}
+button.sw{padding:12px 0;color:#0b1117}
+.hint{font-size:12.5px;color:var(--mut);line-height:1.4;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="hero" id="hero">
+  <div class="lbl" id="lvl">Ladataan…</div>
+  <div class="big"><span id="price">–</span><small>c/kWh</small></div>
+  <div class="nx" id="nx">&nbsp;</div>
+</div>
+
+<h2>Kannattaako nyt?</h2>
+<div class="card task"><div class="dot" id="d1"></div><div><b id="t1">Auton lataus</b><span id="s1"></span></div></div>
+<div class="card task"><div class="dot" id="d2"></div><div><b id="t2">Pyykinpesu</b><span id="s2"></span></div></div>
+
+<h2>Seuraavat tunnit</h2>
+<div class="card"><div id="chart"></div><div id="axis"></div></div>
+
+<div class="st" id="st"></div>
+
+<details>
+<summary>Asetukset</summary>
+<label>Hintarajat (c/kWh, sis. alv)</label>
+<div class="row">
+  <input id="t1v" type="number" step="0.5" aria-label="Vihreä alle">
+  <input id="t2v" type="number" step="0.5" aria-label="Keltainen alle">
+  <input id="t3v" type="number" step="0.5" aria-label="Oranssi alle">
+</div>
+<div class="hint">Vihreä alle 1. rajan, keltainen alle 2., oranssi alle 3., sen jälkeen punainen.</div>
+<label>Auton latausaika (tuntia)</label><input id="carh" type="number" min="1" max="12">
+<label>Pyykinpesun kesto (tuntia)</label><input id="washh" type="number" min="1" max="6">
+
+<label>Lampun ohjaus (webhook-osoite)</label>
+<input id="hook" type="url" placeholder="https://…{hex}…">
+<div class="row" style="margin-top:8px">
+  <select id="method"><option>GET</option><option>POST</option></select>
+  <select id="auto"><option value="1">Päivitä automaattisesti</option><option value="0">Vain testaus</option></select>
+</div>
+<label>POST-sisältö (valinnainen)</label>
+<textarea id="body" rows="2" placeholder='{"color":"{hex}"}'></textarea>
+<div class="hint">Osoitteessa ja sisällössä voi käyttää: {hex} (esim. 22c55e), {r} {g} {b}, {level} (green/yellow/orange/red) ja {price}. Lamppu päivittyy, kun sovellus on auki.</div>
+<div class="row" style="margin-top:6px">
+  <button class="sw" style="background:#22c55e" data-t="0">Vihreä</button>
+  <button class="sw" style="background:#facc15" data-t="1">Keltainen</button>
+  <button class="sw" style="background:#fb923c" data-t="2">Oranssi</button>
+  <button class="sw" style="background:#ef4444" data-t="3">Punainen</button>
+</div>
+<button id="save">Tallenna asetukset</button>
+</details>
+
+<script>
+(function(){
+var LV=[{k:'green',n:'Halpaa – hyvä hetki',c:'#22c55e'},{k:'yellow',n:'Kohtalaista',c:'#facc15'},{k:'orange',n:'Melko kallista',c:'#fb923c'},{k:'red',n:'Kallista – vältä',c:'#ef4444'}];
+var S={t1:6,t2:12,t3:20,carh:4,washh:5,hook:'',method:'GET',body:'',auto:'1'};
+try{var o=JSON.parse(localStorage.getItem('cfg'));if(o)for(var k in o)S[k]=o[k];}catch(e){}
+var slots=[],lastSent=null,$=function(i){return document.getElementById(i)};
+
+function fmt(x){return x.toFixed(2).replace('.',',')}
+function hm(t){var d=new Date(t);return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)}
+function level(p){return p<=S.t1?0:p<=S.t2?1:p<=S.t3?2:3}
+
+function hours(){
+  var m={};
+  slots.forEach(function(s){var h=Math.floor(s.s/36e5);(m[h]=m[h]||[]).push(s.p)});
+  var now=Math.floor(Date.now()/36e5);
+  return Object.keys(m).map(Number).sort(function(a,b){return a-b}).filter(function(h){return h>=now}).map(function(h){
+    var a=m[h];return {t:h*36e5,p:a.reduce(function(x,y){return x+y},0)/a.length};
+  });
+}
+function nowPrice(){
+  var n=Date.now();
+  for(var i=0;i<slots.length;i++)if(slots[i].s<=n&&n<slots[i].e)return slots[i].p;
+  return null;
+}
+function best(H,n){
+  var b=null;
+  for(var i=0;i+n<=H.length;i++){
+    var s=0;for(var j=0;j<n;j++)s+=H[i+j].p;
+    if(!b||s/n<b.avg)b={i:i,avg:s/n,t:H[i].t};
+  }
+  return b;
+}
+function advise(H,n,dot,sub,title,name){
+  var b=best(H,n);
+  if(!b){$(sub).textContent='Ei tarpeeksi hintatietoa';return}
+  var cur=nowPrice(),L=level(cur===null?H[0].p:cur),d=$(dot);
+  var curAvg=0,k=Math.min(n,H.length);for(var j=0;j<k;j++)curAvg+=H[j].p;curAvg/=k;
+  var ok=b.i===0||curAvg<=b.avg*1.15||curAvg<=S.t1;
+  if(ok&&L<3){d.style.background=LV[0].c;$(sub).textContent='Käynnistä nyt · ka. '+fmt(curAvg)+' c/kWh seuraavat '+n+' h'}
+  else if(L===3&&b.i>0){d.style.background=LV[3].c;$(sub).textContent='Odota – halvin '+n+' h jakso klo '+hm(b.t)+'–'+hm(b.t+n*36e5)+' (ka. '+fmt(b.avg)+' vs. nyt '+fmt(curAvg)+' c)'}
+  else{d.style.background=LV[1].c;$(sub).textContent='Halvempaa klo '+hm(b.t)+'–'+hm(b.t+n*36e5)+' (ka. '+fmt(b.avg)+' vs. nyt '+fmt(curAvg)+' c)'}
+}
+function render(){
+  var H=hours();if(!H.length)return;
+  var p=nowPrice();if(p===null)p=H[0].p;
+  var L=level(p);
+  document.documentElement.style.setProperty('--c',LV[L].c);
+  $('hero').style.background=LV[L].c;
+  $('lvl').textContent=LV[L].n;
+  $('price').textContent=fmt(p);
+  if(H[1]){var nl=level(H[1].p);$('nx').textContent='Klo '+hm(H[1].t)+': '+fmt(H[1].p)+' c/kWh'+(nl!==L?' → '+LV[nl].n.split(' –')[0].toLowerCase():'')}
+  advise(H,+S.carh,'d1','s1');
+  advise(H,+S.washh,'d2','s2');
+  var V=H.slice(0,36),mx=Math.max.apply(null,V.map(function(h){return h.p})),c=$('chart');c.innerHTML='';
+  V.forEach(function(h,i){var e=document.createElement('i');e.style.height=Math.max(4,h.p/mx*100)+'%';e.style.background=LV[level(h.p)].c;if(i===0)e.className='now';c.appendChild(e)});
+  $('axis').innerHTML='<span>nyt</span><span>klo '+hm(V[Math.floor(V.length/2)].t)+'</span><span>klo '+hm(V[V.length-1].t)+'</span>';
+  lamp(L,false,p);
+}
+function fill(s,L,p){
+  var c=LV[L].c,r=parseInt(c.substr(1,2),16),g=parseInt(c.substr(3,2),16),b=parseInt(c.substr(5,2),16);
+  return s.replace(/\{hex\}/g,c.substr(1)).replace(/\{r\}/g,r).replace(/\{g\}/g,g).replace(/\{b\}/g,b).replace(/\{level\}/g,LV[L].k).replace(/\{price\}/g,p===undefined?'':p.toFixed(2));
+}
+function lamp(L,force,p){
+  if(!S.hook)return;
+  if(!force&&(S.auto!=='1'||lastSent===L))return;
+  lastSent=L;
+  var o={mode:'no-cors',method:S.method};
+  if(S.method==='POST'){o.body=fill(S.body,L,p);o.headers={'Content-Type':'text/plain'}}
+  try{fetch(fill(S.hook,L,p),o).catch(function(){})}catch(e){}
+}
+function get(){
+  fetch('https://api.porssisahko.net/v1/latest-prices.json',{cache:'no-store'})
+  .then(function(r){return r.json()})
+  .then(function(j){
+    slots=j.prices.map(function(p){return {s:new Date(p.startDate).getTime(),e:new Date(p.endDate).getTime(),p:p.price}}).sort(function(a,b){return a.s-b.s});
+    try{localStorage.setItem('cache',JSON.stringify(slots))}catch(e){}
+    $('st').textContent='Hinnat päivitetty klo '+hm(Date.now())+' · lähde porssisahko.net';
+    render();
+  })
+  .catch(function(){
+    if(!slots.length){try{slots=JSON.parse(localStorage.getItem('cache'))||[]}catch(e){}}
+    $('st').textContent=slots.length?'Ei yhteyttä – näytetään viimeksi tallennetut hinnat':'Hintojen haku epäonnistui. Tarkista nettiyhteys.';
+    render();
+  });
+}
+function fillForm(){['t1','t2','t3'].forEach(function(k){$(k+'v').value=S[k]});$('carh').value=S.carh;$('washh').value=S.washh;$('hook').value=S.hook;$('method').value=S.method;$('body').value=S.body;$('auto').value=S.auto}
+$('save').onclick=function(){
+  S.t1=+$('t1v').value;S.t2=+$('t2v').value;S.t3=+$('t3v').value;S.carh=Math.max(1,+$('carh').value||4);S.washh=Math.max(1,+$('washh').value||2);
+  S.hook=$('hook').value.trim();S.method=$('method').value;S.body=$('body').value;S.auto=$('auto').value;
+  try{localStorage.setItem('cfg',JSON.stringify(S))}catch(e){}
+  lastSent=null;render();
+};
+Array.prototype.forEach.call(document.querySelectorAll('.sw'),function(b){b.onclick=function(){lamp(+b.getAttribute('data-t'),true)}});
+
+// aloituskuvake
+try{var cv=document.createElement('canvas');cv.width=cv.height=180;var x=cv.getContext('2d');x.fillStyle='#101820';x.fillRect(0,0,180,180);x.fillStyle='#22c55e';x.beginPath();x.moveTo(104,22);x.lineTo(48,100);x.lineTo(84,100);x.lineTo(70,158);x.lineTo(132,74);x.lineTo(96,74);x.closePath();x.fill();$('ico').href=cv.toDataURL('image/png')}catch(e){}
+
+fillForm();
+try{slots=JSON.parse(localStorage.getItem('cache'))||[]}catch(e){}
+render();get();
+setInterval(render,30000);
+setInterval(get,20*60000);
+document.addEventListener('visibilitychange',function(){if(!document.hidden){get()}});
+})();
+</script>
+</body>
+</html>
