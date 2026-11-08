@@ -156,21 +156,26 @@ function lamp(L,force,p){
   if(S.method==='POST'){o.body=fill(S.body,L,p);o.headers={'Content-Type':'text/plain'}}
   try{fetch(fill(S.hook,L,p),o).catch(function(){})}catch(e){}
 }
-function get(){
-  fetch('https://api.porssisahko.net/v1/latest-prices.json',{cache:'no-store'})
-  .then(function(r){return r.json()})
-  .then(function(j){
-    slots=j.prices.map(function(p){return {s:new Date(p.startDate).getTime(),e:new Date(p.endDate).getTime(),p:p.price}}).sort(function(a,b){return a.s-b.s});
-    try{localStorage.setItem('cache',JSON.stringify(slots))}catch(e){}
-    $('st').textContent='Hinnat päivitetty klo '+hm(Date.now())+' · lähde porssisahko.net';
-    render();
-  })
-  .catch(function(){
-    if(!slots.length){try{slots=JSON.parse(localStorage.getItem('cache'))||[]}catch(e){}}
-    $('st').textContent=slots.length?'Ei yhteyttä – näytetään viimeksi tallennetut hinnat':'Hintojen haku epäonnistui. Tarkista nettiyhteys.';
-    render();
-  });
+var SRC=['https://api.porssisahko.net/v1/latest-prices.json','https://api.porssisahko.net/v2/latest-prices.json','https://porssisahkovahti.fi/api/v1/latest-prices.json'];
+function fail(errs){
+  if(!slots.length){try{slots=JSON.parse(localStorage.getItem('cache'))||[]}catch(e){}}
+  $('st').textContent=slots.length?'Ei yhteyttä – näytetään viimeksi tallennetut hinnat':'Hintojen haku epäonnistui. '+errs.join(' | ');
+  try{render()}catch(e){}
 }
+function tryGet(i,errs){
+  if(i>=SRC.length){fail(errs);return}
+  fetch(SRC[i])
+  .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
+  .then(function(j){
+    if(!j||!j.prices||!j.prices.length)throw new Error('tyhjä vastaus');
+    slots=j.prices.map(function(p){return {s:new Date(p.startDate).getTime(),e:new Date(p.endDate).getTime(),p:+p.price}}).sort(function(a,b){return a.s-b.s});
+    try{localStorage.setItem('cache',JSON.stringify(slots))}catch(e){}
+    $('st').textContent='Hinnat päivitetty klo '+hm(Date.now())+' · lähde '+SRC[i].split('/')[2];
+    try{render()}catch(e){$('st').textContent='Näyttövirhe: '+e.message}
+  })
+  .catch(function(e){errs.push((i+1)+': '+((e&&e.message)||e));tryGet(i+1,errs)});
+}
+function get(){tryGet(0,[])}
 function fillForm(){['t1','t2','t3'].forEach(function(k){$(k+'v').value=S[k]});$('carh').value=S.carh;$('washh').value=S.washh;$('hook').value=S.hook;$('method').value=S.method;$('body').value=S.body;$('auto').value=S.auto}
 $('save').onclick=function(){
   S.t1=+$('t1v').value;S.t2=+$('t2v').value;S.t3=+$('t3v').value;S.carh=Math.max(1,+$('carh').value||4);S.washh=Math.max(1,+$('washh').value||2);
