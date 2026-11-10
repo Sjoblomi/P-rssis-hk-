@@ -37,6 +37,8 @@ input,select,textarea{width:100%;font:inherit;font-size:16px;padding:9px 10px;bo
 .row{display:flex;gap:8px}.row>*{flex:1}
 button{font:inherit;font-size:15px;font-weight:600;padding:10px 12px;border-radius:10px;border:0;background:#2f4559;color:var(--tx);margin-top:10px}
 button.sw{padding:12px 0;color:#0b1117}
+.warn{display:none;background:#3a2314;border:1px solid #fb923c;color:#ffd9b8;border-radius:16px;padding:12px 16px;margin-top:12px;font-size:14px;line-height:1.45}
+.irow{display:flex;gap:6px;margin-top:6px}.irow input:nth-child(1){flex:3}.irow input:nth-child(2){flex:1;min-width:0}.irow button{margin:0;flex:none;padding:0 14px}
 .hint{font-size:12.5px;color:var(--mut);line-height:1.4;margin-top:8px}
 </style>
 </head>
@@ -47,9 +49,10 @@ button.sw{padding:12px 0;color:#0b1117}
   <div class="nx" id="nx">&nbsp;</div>
 </div>
 
+<div class="warn" id="warn"></div>
+
 <h2>Kannattaako nyt?</h2>
-<div class="card task"><div class="dot" id="d1"></div><div><b id="t1">Auton lataus</b><span id="s1"></span></div></div>
-<div class="card task"><div class="dot" id="d2"></div><div><b id="t2">Pyykinpesu</b><span id="s2"></span></div></div>
+<div id="tasks"></div>
 
 <h2>Seuraavat 24 h (varttihinnat)</h2>
 <div class="card"><div id="chart"></div><div id="axis"></div><div class="hint" id="tip" style="text-align:center">Napauta palkkia nähdäksesi vartin hinnan</div></div>
@@ -65,8 +68,12 @@ button.sw{padding:12px 0;color:#0b1117}
   <input id="t3v" type="number" step="0.5" aria-label="Oranssi alle">
 </div>
 <div class="hint">Vihreä alle 1. rajan, keltainen alle 2., oranssi alle 3., sen jälkeen punainen.</div>
-<label>Auton latausaika (tuntia)</label><input id="carh" type="number" min="1" max="12">
-<label>Pyykinpesun kesto (tuntia)</label><input id="washh" type="number" min="1" max="6">
+<label>Seurattavat kohteet (nimi ja kesto tunteina)</label>
+<div id="items"></div>
+<button id="add" type="button">+ Lisää kohde</button>
+<label>Odota huomiseen, jos päivän halvin jakso on yli (c/kWh)</label>
+<input id="waitv" type="number" step="0.5">
+<div class="hint">Jos kohteen halvin jakso tänään on tätä kalliimpi ja huomisen hinnat ovat halvemmat, sovellus suosittelee odottamaan huomiseen. 0 = pois käytöstä. Sama raja ohjaa varoitusta, joka näkyy, jos vähintään 4 h jaksoa tämän rajan alla ei löydy tänään eikä huomenna.</div>
 
 <label>Lampun ohjaus (webhook-osoite)</label>
 <input id="hook" type="url" placeholder="https://…{hex}…">
@@ -89,8 +96,9 @@ button.sw{padding:12px 0;color:#0b1117}
 <script>
 (function(){
 var LV=[{k:'green',n:'Halpaa – hyvä hetki',c:'#22c55e'},{k:'yellow',n:'Kohtalaista',c:'#facc15'},{k:'orange',n:'Melko kallista',c:'#fb923c'},{k:'red',n:'Kallista – vältä',c:'#ef4444'}];
-var S={t1:6,t2:12,t3:20,carh:4,washh:5,hook:'',method:'GET',body:'',auto:'1'};
+var S={t1:6,t2:12,t3:20,carh:4,washh:5,wait:10,items:null,hook:'',method:'GET',body:'',auto:'1'};
 try{var o=JSON.parse(localStorage.getItem('cfg'));if(o)for(var k in o)S[k]=o[k];}catch(e){}
+if(!Array.isArray(S.items))S.items=[{n:'Auton lataus',h:+S.carh||4},{n:'Pyykinpesu',h:+S.washh||5}];
 var slots=[],lastSent=null,$=function(i){return document.getElementById(i)};
 
 function fmt(x){return x.toFixed(2).replace('.',',')}
@@ -98,25 +106,38 @@ function hm(t){var d=new Date(t);return ('0'+d.getHours()).slice(-2)+':'+('0'+d.
 function level(p){return p<=S.t1?0:p<=S.t2?1:p<=S.t3?2:3}
 
 function fut(){var n=Date.now();return slots.filter(function(x){return x.e>n})}
-function best(F,k){
+function el(t,c){var e=document.createElement(t);if(c)e.className=c;return e}
+function bestIn(F,k,from,to,startOnly){
   var b=null;
   for(var i=0;i+k<=F.length;i++){
+    if(F[i].s<from||(startOnly?F[i].s>=to:F[i+k-1].e>to))continue;
     var sum=0,ok=true;
     for(var j=0;j<k;j++){sum+=F[i+j].p;if(j&&F[i+j].s!==F[i+j-1].e){ok=false;break}}
     if(ok&&(!b||sum/k<b.avg))b={i:i,avg:sum/k,t:F[i].s};
   }
   return b;
 }
-function advise(F,n,dot,sub){
-  var len=F[0].e-F[0].s,k=Math.max(1,Math.round(n*36e5/len)),b=best(F,k);
-  if(!b){$(sub).textContent='Ei tarpeeksi hintatietoa';return}
-  var L=level(F[0].p),d=$(dot),m=Math.min(k,F.length),curAvg=0,j;
+function advise(F,n,d,sp){
+  var len=F[0].e-F[0].s,k=Math.max(1,Math.round(n*36e5/len)),x=new Date();
+  var m1=new Date(x.getFullYear(),x.getMonth(),x.getDate()+1).getTime(),m2=new Date(x.getFullYear(),x.getMonth(),x.getDate()+2).getTime();
+  var bt=bestIn(F,k,0,m1)||bestIn(F,k,0,m1,true),bm=bestIn(F,k,m1,m2);
+  var rng=function(b){return 'klo '+hm(b.t)+'–'+hm(b.t+k*len)};
+  var set=function(c,t){d.style.background=LV[c].c;sp.textContent=t};
+  var nh=String(n).replace('.',',');
+  if(!bt){if(bm)set(3,'Odota huomiseen – halvin jakso '+rng(bm)+' (ka. '+fmt(bm.avg)+' c)');else sp.textContent='Ei tarpeeksi hintatietoa';return}
+  var L=level(F[0].p),m=Math.min(k,F.length),curAvg=0,j;
   for(j=0;j<m;j++)curAvg+=F[j].p;curAvg/=m;
-  var rng='klo '+hm(b.t)+'–'+hm(b.t+k*len),cmp='(ka. '+fmt(b.avg)+' vs. nyt '+fmt(curAvg)+' c)';
-  var ok=b.i===0||curAvg<=b.avg*1.15||curAvg<=S.t1;
-  if(ok&&L<3){d.style.background=LV[0].c;$(sub).textContent='Käynnistä nyt · ka. '+fmt(curAvg)+' c/kWh seuraavat '+n+' h'}
-  else if(L===3&&b.i>0){d.style.background=LV[3].c;$(sub).textContent='Odota – halvin '+n+' h jakso '+rng+' '+cmp}
-  else{d.style.background=LV[1].c;$(sub).textContent='Halvempaa '+rng+' '+cmp}
+  if(S.wait>0&&bt.avg>S.wait){
+    if(bm&&bm.avg<bt.avg)set(3,'Odota huomiseen – halvin jakso '+rng(bm)+' (ka. '+fmt(bm.avg)+' c). Tänään parhaimmillaan '+fmt(bt.avg)+' c');
+    else if(bm)set(2,'Tänään kallista, mutta huomenna ei halvempaa. Halvin jakso tänään '+rng(bt)+' (ka. '+fmt(bt.avg)+' c)');
+    else set(2,'Tänään kallista (halvin '+nh+' h jakso '+fmt(bt.avg)+' c). Huomisen hintoja ei ole vielä – ne julkaistaan yleensä iltapäivällä');
+    return;
+  }
+  var cmp='(ka. '+fmt(bt.avg)+' vs. nyt '+fmt(curAvg)+' c)';
+  var ok=bt.i===0||curAvg<=bt.avg*1.15||curAvg<=S.t1;
+  if(ok&&L<3)set(0,'Käynnistä nyt · ka. '+fmt(curAvg)+' c/kWh seuraavat '+nh+' h');
+  else if(L===3&&bt.i>0)set(3,'Odota – halvin '+nh+' h jakso '+rng(bt)+' '+cmp);
+  else set(1,'Halvempaa '+rng(bt)+' '+cmp);
 }
 function render(){
   var F=fut();if(!F.length)return;
@@ -126,13 +147,27 @@ function render(){
   $('lvl').textContent=LV[L].n+' ('+hm(F[0].s)+'–'+hm(F[0].e)+')';
   $('price').textContent=fmt(p);
   if(F[1]){var nl=level(F[1].p);$('nx').textContent='Klo '+hm(F[1].s)+': '+fmt(F[1].p)+' c/kWh'+(nl!==L?' → '+LV[nl].n.split(' –')[0].toLowerCase():'')}
-  advise(F,+S.carh,'d1','s1');
-  advise(F,+S.washh,'d2','s2');
+  var T=$('tasks');T.innerHTML='';
+  S.items.forEach(function(it){
+    var c=el('div','card task'),dot=el('div','dot'),w=el('div'),b=el('b'),sp=el('span');
+    b.textContent=it.n;w.appendChild(b);w.appendChild(sp);c.appendChild(dot);c.appendChild(w);T.appendChild(c);
+    advise(F,+it.h,dot,sp);
+  });
   var V=F.slice(0,96),mx=Math.max.apply(null,V.map(function(h){return h.p})),c=$('chart');c.innerHTML='';
   V.forEach(function(h,i){var e=document.createElement('i');e.style.height=Math.max(4,h.p/mx*100)+'%';e.style.background=LV[level(h.p)].c;if(i===0)e.className='now';e.onclick=function(){$('tip').textContent=hm(h.s)+'–'+hm(h.e)+' · '+fmt(h.p)+' c/kWh'};c.appendChild(e)});
   var q=function(x){return V[Math.min(V.length-1,Math.floor(V.length*x))]};
   $('axis').innerHTML='<span>nyt</span><span>'+hm(q(.33).s)+'</span><span>'+hm(q(.66).s)+'</span><span>'+hm(V[V.length-1].s)+'</span>';
+  warn(F);
   lamp(L,false,p);
+}
+function warn(F){
+  var w=$('warn'),x=new Date(),m1=new Date(x.getFullYear(),x.getMonth(),x.getDate()+1).getTime();
+  w.style.display='none';
+  if(!(S.wait>0)||!F.some(function(h){return h.s>=m1}))return;
+  var len=F[0].e-F[0].s,k=Math.max(1,Math.round(4*36e5/len)),b=bestIn(F,k,0,Infinity,true);
+  if(!b||b.avg<S.wait)return;
+  w.style.display='block';
+  w.textContent='⚠️ Sähkö on kallista lähipäivinä: tänään ja huomenna ei löydy vähintään 4 h jaksoa, jonka keskihinta on alle '+String(S.wait).replace('.',',')+' c/kWh. Halvin 4 h jakso on '+(b.t<m1?'tänään':'huomenna')+' klo '+hm(b.t)+'–'+hm(b.t+k*len)+' (ka. '+fmt(b.avg)+' c). Vältä suurta sähkönkäyttöä, jos voit, ja odota seuraavien päivien hintoja.';
 }
 function fill(s,L,p){
   var c=LV[L].c,r=parseInt(c.substr(1,2),16),g=parseInt(c.substr(3,2),16),b=parseInt(c.substr(5,2),16);
@@ -166,12 +201,22 @@ function tryGet(i,errs){
   .catch(function(e){errs.push((i+1)+': '+((e&&e.message)||e));tryGet(i+1,errs)});
 }
 function get(){tryGet(0,[])}
-function fillForm(){['t1','t2','t3'].forEach(function(k){$(k+'v').value=S[k]});$('carh').value=S.carh;$('washh').value=S.washh;$('hook').value=S.hook;$('method').value=S.method;$('body').value=S.body;$('auto').value=S.auto}
+function addRow(n,h){
+  var r=el('div','irow'),a=el('input'),b=el('input'),x=el('button');
+  a.placeholder='Nimi';a.value=n||'';
+  b.type='number';b.min='0.25';b.step='0.25';b.placeholder='h';b.value=h||'';
+  x.type='button';x.textContent='✕';x.onclick=function(){r.parentNode.removeChild(r)};
+  r.appendChild(a);r.appendChild(b);r.appendChild(x);$('items').appendChild(r);
+}
+function fillForm(){['t1','t2','t3'].forEach(function(k){$(k+'v').value=S[k]});$('items').innerHTML='';S.items.forEach(function(i){addRow(i.n,i.h)});$('waitv').value=S.wait;$('hook').value=S.hook;$('method').value=S.method;$('body').value=S.body;$('auto').value=S.auto}
+$('add').onclick=function(){addRow('','')};
 $('save').onclick=function(){
-  S.t1=+$('t1v').value;S.t2=+$('t2v').value;S.t3=+$('t3v').value;S.carh=Math.max(1,+$('carh').value||4);S.washh=Math.max(1,+$('washh').value||2);
+  S.t1=+$('t1v').value;S.t2=+$('t2v').value;S.t3=+$('t3v').value;
+  var its=[];Array.prototype.forEach.call($('items').children,function(r){var n=r.children[0].value.trim(),h=+r.children[1].value;if(n&&h>0)its.push({n:n,h:h})});
+  S.items=its;var w=parseFloat($('waitv').value);S.wait=isNaN(w)?10:w;
   S.hook=$('hook').value.trim();S.method=$('method').value;S.body=$('body').value;S.auto=$('auto').value;
   try{localStorage.setItem('cfg',JSON.stringify(S))}catch(e){}
-  lastSent=null;render();
+  lastSent=null;fillForm();render();
 };
 Array.prototype.forEach.call(document.querySelectorAll('.sw'),function(b){b.onclick=function(){lamp(+b.getAttribute('data-t'),true)}});
 
