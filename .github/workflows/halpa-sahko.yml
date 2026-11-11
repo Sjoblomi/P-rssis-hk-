@@ -1,0 +1,114 @@
+name: Halpa sähkö -ilmoitus
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      testi:
+        description: "Lähetä vain testi-ilmoitus"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: halpa-sahko
+  cancel-in-progress: false
+
+jobs:
+  ilmoita:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tarkista hinta ja ilmoita
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          GREEN_LIMIT: "6"
+          MIN_MINUTES: "60"
+          TESTI: ${{ github.event.inputs.testi }}
+        run: |
+          python3 - <<'PY'
+          import os, sys, json, urllib.request
+          from datetime import datetime, timezone
+          from zoneinfo import ZoneInfo
+
+          topic = os.environ.get("NTFY_TOPIC", "").strip()
+          limit = float(os.environ.get("GREEN_LIMIT", "6"))
+          min_min = int(os.environ.get("MIN_MINUTES", "60"))
+          if not topic:
+              sys.exit("NTFY_TOPIC puuttuu (Settings > Secrets and variables > Actions)")
+
+          def send(title, msg):
+              body = json.dumps({"topic": topic, "title": title, "message": msg, "tags": ["zap"]}).encode()
+              req = urllib.request.Request("https://ntfy.sh/", data=body, headers={"Content-Type": "application/json"})
+              urllib.request.urlopen(req, timeout=20).read()
+
+          if os.environ.get("TESTI") == "true":
+              send("Testi", "Ilmoitukset toimivat.")
+              sys.exit(0)
+
+          data = None
+          for u in ("https://api.porssisahko.net/v2/latest-prices.json",
+                    "https://api.porssisahko.net/v1/latest-prices.json"):
+              try:
+                  req = urllib.request.Request(u, headers={"User-Agent": "halpa-sahko-ilmoitus"})
+                  data = json.load(urllib.request.urlopen(req, timeout=20))["prices"]
+                  break
+              except Exception as e:
+                  print("Haku epäonnistui:", u, e)
+          if not data:
+              print("Hintoja ei saatu tällä kertaa")
+              sys.exit(0)
+
+          def t(x):
+              return datetime.fromisoformat(x.replace("Z", "+00:00"))
+
+          sl = sorted(({"s": t(p["startDate"]), "e": t(p["endDate"]), "p": float(p["price"])} for p in data),
+                      key=lambda x: x["s"])
+          now = datetime.now(timezone.utc)
+          cur = next((i for i, x in enumerate(sl) if x["s"] <= now < x["e"]), None)
+          if cur is None or sl[cur]["p"] > limit:
+              print("Ei halpaa jaksoa nyt")
+              sys.exit(0)
+
+          a = cur
+          while a > 0 and sl[a-1]["e"] == sl[a]["s"] and sl[a-1]["p"] <= limit:
+              a -= 1
+          b = cur
+          while b + 1 < len(sl) and sl[b+1]["s"] == sl[b]["e"] and sl[b+1]["p"] <= limit:
+              b += 1
+          start, end = sl[a]["s"], sl[b]["e"]
+          if (end - start).total_seconds() / 60 < min_min:
+              print("Halpa jakso on liian lyhyt")
+              sys.exit(0)
+
+          key = start.isoformat()
+          try:
+              last = open("tila.txt").read().strip()
+          except FileNotFoundError:
+              last = ""
+          if last == key:
+              print("Tästä jaksosta on jo ilmoitettu")
+              sys.exit(0)
+
+          fmt = lambda v: f"{v:.2f}".replace(".", ",")
+          avg = sum(x["p"] for x in sl[a:b+1]) / (b - a + 1)
+          until = end.astimezone(ZoneInfo("Europe/Helsinki")).strftime("%H:%M")
+          send("Halpaa sähköä – hyvä hetki käyttää",
+               f"Hinta nyt {fmt(sl[cur]['p'])} c/kWh. Halpa jakso kestää klo {until} asti (ka. {fmt(avg)} c).")
+          open("tila.txt", "w").write(key)
+          print("Ilmoitus lähetetty")
+          PY
+
+      - name: Tallenna tila
+        run: |
+          if [ -n "$(git status --porcelain tila.txt)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add tila.txt
+            git commit -m "Päivitä ilmoitustila"
+            git push
+          fi
