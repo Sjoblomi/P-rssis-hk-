@@ -107,20 +107,21 @@ function level(p){return p<=S.t1?0:p<=S.t2?1:p<=S.t3?2:3}
 
 function fut(){var n=Date.now();return slots.filter(function(x){return x.e>n})}
 function el(t,c){var e=document.createElement(t);if(c)e.className=c;return e}
-function bestIn(F,k,from,to,startOnly){
+function slotLen(F){return Math.max(6e4,Math.round((F[0].e-F[0].s)/6e4)*6e4)}
+function bestIn(F,k,from,to,startOnly,len){
   var b=null;
   for(var i=0;i+k<=F.length;i++){
     if(F[i].s<from||(startOnly?F[i].s>=to:F[i+k-1].e>to))continue;
     var sum=0,ok=true;
-    for(var j=0;j<k;j++){sum+=F[i+j].p;if(j&&F[i+j].s!==F[i+j-1].e){ok=false;break}}
+    for(var j=0;j<k;j++){sum+=F[i+j].p;if(j&&F[i+j].s-F[i+j-1].s>len*1.5){ok=false;break}}
     if(ok&&(!b||sum/k<b.avg))b={i:i,avg:sum/k,t:F[i].s};
   }
   return b;
 }
 function advise(F,n,d,sp){
-  var len=F[0].e-F[0].s,k=Math.max(1,Math.round(n*36e5/len)),x=new Date();
+  var len=slotLen(F),k=Math.max(1,Math.round(n*36e5/len)),x=new Date();
   var m1=new Date(x.getFullYear(),x.getMonth(),x.getDate()+1).getTime(),m2=new Date(x.getFullYear(),x.getMonth(),x.getDate()+2).getTime();
-  var bt=bestIn(F,k,0,m1)||bestIn(F,k,0,m1,true),bm=bestIn(F,k,m1,m2);
+  var bt=bestIn(F,k,0,m1,false,len)||bestIn(F,k,0,m1,true,len),bm=bestIn(F,k,m1,m2,false,len);
   var rng=function(b){return 'klo '+hm(b.t)+'–'+hm(b.t+k*len)};
   var set=function(c,t){d.style.background=LV[c].c;sp.textContent=t};
   var nh=String(n).replace('.',',');
@@ -144,7 +145,8 @@ function render(){
   var p=F[0].p,L=level(p);
   document.documentElement.style.setProperty('--c',LV[L].c);
   $('hero').style.background=LV[L].c;
-  $('lvl').textContent=LV[L].n+' ('+hm(F[0].s)+'–'+hm(F[0].e)+')';
+  var len=slotLen(F);
+  $('lvl').textContent=LV[L].n+' ('+hm(F[0].s)+'–'+hm(F[0].s+len)+')';
   $('price').textContent=fmt(p);
   if(F[1]){var nl=level(F[1].p);$('nx').textContent='Klo '+hm(F[1].s)+': '+fmt(F[1].p)+' c/kWh'+(nl!==L?' → '+LV[nl].n.split(' –')[0].toLowerCase():'')}
   var T=$('tasks');T.innerHTML='';
@@ -154,7 +156,7 @@ function render(){
     advise(F,+it.h,dot,sp);
   });
   var V=F.slice(0,96),mx=Math.max.apply(null,V.map(function(h){return h.p})),c=$('chart');c.innerHTML='';
-  V.forEach(function(h,i){var e=document.createElement('i');e.style.height=Math.max(4,h.p/mx*100)+'%';e.style.background=LV[level(h.p)].c;if(i===0)e.className='now';e.onclick=function(){$('tip').textContent=hm(h.s)+'–'+hm(h.e)+' · '+fmt(h.p)+' c/kWh'};c.appendChild(e)});
+  V.forEach(function(h,i){var e=document.createElement('i');e.style.height=Math.max(4,h.p/mx*100)+'%';e.style.background=LV[level(h.p)].c;if(i===0)e.className='now';e.onclick=function(){$('tip').textContent=hm(h.s)+'–'+hm(h.s+len)+' · '+fmt(h.p)+' c/kWh'};c.appendChild(e)});
   var q=function(x){return V[Math.min(V.length-1,Math.floor(V.length*x))]};
   $('axis').innerHTML='<span>nyt</span><span>'+hm(q(.33).s)+'</span><span>'+hm(q(.66).s)+'</span><span>'+hm(V[V.length-1].s)+'</span>';
   warn(F);
@@ -164,7 +166,7 @@ function warn(F){
   var w=$('warn'),x=new Date(),m1=new Date(x.getFullYear(),x.getMonth(),x.getDate()+1).getTime();
   w.style.display='none';
   if(!(S.wait>0)||!F.some(function(h){return h.s>=m1}))return;
-  var len=F[0].e-F[0].s,k=Math.max(1,Math.round(4*36e5/len)),b=bestIn(F,k,0,Infinity,true);
+  var len=slotLen(F),k=Math.max(1,Math.round(4*36e5/len)),b=bestIn(F,k,0,Infinity,true,len);
   if(!b||b.avg<S.wait)return;
   w.style.display='block';
   w.textContent='⚠️ Sähkö on kallista lähipäivinä: tänään ja huomenna ei löydy vähintään 4 h jaksoa, jonka keskihinta on alle '+String(S.wait).replace('.',',')+' c/kWh. Halvin 4 h jakso on '+(b.t<m1?'tänään':'huomenna')+' klo '+hm(b.t)+'–'+hm(b.t+k*len)+' (ka. '+fmt(b.avg)+' c). Vältä suurta sähkönkäyttöä, jos voit, ja odota seuraavien päivien hintoja.';
