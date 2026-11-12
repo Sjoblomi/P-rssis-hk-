@@ -2,7 +2,7 @@ name: Halpa sähkö -ilmoitus
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
     inputs:
       testi:
@@ -29,12 +29,12 @@ jobs:
           GREEN_LIMIT: "6"
           MIN_MINUTES: "60"
           RED_LIMIT: "20"
-          RED_MIN_MINUTES: "30"
+          RED_MIN_MINUTES: "60"
           TESTI: ${{ github.event.inputs.testi }}
         run: |
           python3 - <<'PY'
           import os, sys, json, urllib.request
-          from datetime import datetime, timezone
+          from datetime import datetime, timedelta, timezone
           from zoneinfo import ZoneInfo
 
           topic = os.environ.get("NTFY_TOPIC", "").strip()
@@ -60,6 +60,7 @@ jobs:
               try:
                   req = urllib.request.Request(u, headers={"User-Agent": "halpa-sahko-ilmoitus"})
                   data = json.load(urllib.request.urlopen(req, timeout=20))["prices"]
+                  print("Lähde:", u, "| rivejä:", len(data), "| esimerkki:", data[0])
                   break
               except Exception as e:
                   print("Haku epäonnistui:", u, e)
@@ -70,30 +71,47 @@ jobs:
           def t(x):
               return datetime.fromisoformat(x.replace("Z", "+00:00"))
 
-          sl = sorted(({"s": t(p["startDate"]), "e": t(p["endDate"]), "p": float(p["price"])} for p in data),
-                      key=lambda x: x["s"])
+          # Käytetään vain alkuaikoja (loppuaikojen tarkkuudesta ei ole väliä)
+          # ja siedetään yksittäinen piikki halvan tai kalliin jakson keskellä.
+          q = sorted({t(p["startDate"]): float(p["price"]) for p in data}.items())
+          sl = [{"s": s, "p": v} for s, v in q]
+          diffs = [(sl[i+1]["s"] - sl[i]["s"]).total_seconds() for i in range(len(sl) - 1)]
+          L = timedelta(seconds=min([d for d in diffs if d > 0] or [900]))
           now = datetime.now(timezone.utc)
-          cur = next((i for i, x in enumerate(sl) if x["s"] <= now < x["e"]), None)
-          if cur is None:
-              print("Nykyistä hintaa ei löytynyt")
+          cur = max((i for i, x in enumerate(sl) if x["s"] <= now), default=None)
+          if cur is None or now - sl[cur]["s"] >= timedelta(hours=1):
+              print("Hintatiedot eivät ole ajan tasalla")
               sys.exit(0)
+          p = sl[cur]["p"]
 
           HEL = ZoneInfo("Europe/Helsinki")
           is_g = lambda x: x["p"] <= g_lim
+          soft_g = lambda x: x["p"] <= g_lim * 1.5
           is_r = lambda x: x["p"] > r_lim
+          soft_r = lambda x: x["p"] > r_lim * 0.75
           fmt = lambda v: f"{v:.2f}".replace(".", ",")
 
-          def stretch(i, ok):
+          def stretch(i, ok, soft):
               a = i
-              while a > 0 and sl[a-1]["e"] == sl[a]["s"] and ok(sl[a-1]):
-                  a -= 1
+              while a > 0:
+                  if ok(sl[a-1]):
+                      a -= 1
+                  elif a > 1 and soft(sl[a-1]) and ok(sl[a-2]):
+                      a -= 2
+                  else:
+                      break
               b = i
-              while b + 1 < len(sl) and sl[b+1]["s"] == sl[b]["e"] and ok(sl[b+1]):
-                  b += 1
+              while b + 1 < len(sl):
+                  if ok(sl[b+1]):
+                      b += 1
+                  elif b + 2 < len(sl) and soft(sl[b+1]) and ok(sl[b+2]):
+                      b += 2
+                  else:
+                      break
               return a, b
 
           def mins(a, b):
-              return (sl[b]["e"] - sl[a]["s"]).total_seconds() / 60
+              return ((sl[b]["s"] - sl[a]["s"]) + L).total_seconds() / 60
 
           def avg(a, b):
               return sum(x["p"] for x in sl[a:b+1]) / (b - a + 1)
@@ -106,13 +124,13 @@ jobs:
               return "tänään" if k == 0 else "huomenna" if k == 1 else d.astimezone(HEL).strftime("%d.%m.")
 
           def until(b):
-              s = "klo " + hm(sl[b]["e"])
+              s = "klo " + hm(sl[b]["s"] + L)
               return "vähintään " + s if b == len(sl) - 1 else s
 
           def next_green(i):
               while i < len(sl):
                   if is_g(sl[i]):
-                      a, b = stretch(i, is_g)
+                      a, b = stretch(i, is_g, soft_g)
                       if mins(a, b) >= g_min:
                           return a, b
                       i = b + 1
@@ -120,14 +138,15 @@ jobs:
                       i += 1
               return None
 
-          p = sl[cur]["p"]
-          if p <= g_lim:
-              kind, (a, b), need = "green", stretch(cur, is_g), g_min
-          elif p > r_lim:
-              kind, (a, b), need = "red", stretch(cur, is_r), r_min
+          print(f"Nyt {fmt(p)} c/kWh (vartti alkoi {hm(sl[cur]['s'])}), rivejä: {len(sl)}")
+          if is_g(sl[cur]):
+              kind, (a, b), need = "green", stretch(cur, is_g, soft_g), g_min
+          elif is_r(sl[cur]):
+              kind, (a, b), need = "red", stretch(cur, is_r, soft_r), r_min
           else:
               print("Hinta on normaali, ei ilmoitusta")
               sys.exit(0)
+          print(f"Jakso ({kind}): {hm(sl[a]['s'])}–{hm(sl[b]['s'] + L)}, {mins(a, b):.0f} min")
           if mins(a, b) < need:
               print("Jakso on liian lyhyt")
               sys.exit(0)
