@@ -25,9 +25,18 @@ h2{font-size:15px;margin:22px 4px 8px;color:var(--mut);font-weight:600}
 .dot{width:14px;height:14px;border-radius:50%;flex:none;background:var(--mut)}
 .task b{display:block;font-size:17px}
 .task span{font-size:14px;color:var(--mut)}
-#chart{display:flex;align-items:flex-end;gap:1px;height:120px}
-#chart i{flex:1;border-radius:2px 2px 0 0;min-height:4px;opacity:.55}
-#chart i.now{opacity:1;outline:2px solid #fff;outline-offset:1px}
+#chart{position:relative;display:flex;align-items:flex-end;gap:1px;height:120px;touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+#chart i{position:relative;flex:1;border-radius:2px 2px 0 0;min-height:4px;opacity:.55;transition:opacity .15s}
+#chart i.now{opacity:1;outline:1px solid rgba(255,255,255,.85);outline-offset:1px}
+#chart i.sel{opacity:1;filter:brightness(1.15)}
+#chart i.sel::before{content:"";position:absolute;left:-1px;right:-1px;bottom:0;height:120px;background:rgba(255,255,255,.13);border-radius:3px;z-index:-1;pointer-events:none}
+#chart i.sel::after{content:"";position:absolute;left:50%;top:-9px;width:5px;height:5px;margin-left:-2.5px;border-radius:50%;background:#fff;box-shadow:0 0 0 2px rgba(255,255,255,.25)}
+.tip{display:flex;align-items:center;justify-content:center;gap:8px;min-height:30px;margin-top:8px;font-size:12.5px;color:var(--mut)}
+.tip .td{display:none;width:9px;height:9px;border-radius:50%;flex:none}
+.tip.on{font-size:15px;font-weight:600;color:var(--tx)}
+.tip.on .td{display:inline-block}
+.tip button{display:none;margin:0;padding:2px 9px;font-size:12px;background:#2f4559;border-radius:8px}
+.tip.on button{display:inline-block}
 #axis{display:flex;justify-content:space-between;font-size:11px;color:var(--mut);margin-top:6px}
 .st{font-size:12px;color:var(--mut);text-align:center;margin-top:14px}
 details{background:var(--card);border-radius:16px;padding:12px 16px;margin-top:14px}
@@ -55,7 +64,7 @@ button.sw{padding:12px 0;color:#0b1117}
 <div id="tasks"></div>
 
 <h2>Seuraavat 24 h (varttihinnat)</h2>
-<div class="card"><div id="chart"></div><div id="axis"></div><div class="hint" id="tip" style="text-align:center">Napauta palkkia nähdäksesi vartin hinnan</div></div>
+<div class="card"><div id="chart"></div><div id="axis"></div><div class="tip" id="tip"><span class="td" id="td"></span><span id="tipt">Napauta tai liu’uta kuvaajaa nähdäksesi vartin hinnan</span><button id="tipx" type="button" aria-label="Poista valinta">✕</button></div></div>
 
 <div class="st" id="st"></div>
 
@@ -74,6 +83,11 @@ button.sw{padding:12px 0;color:#0b1117}
 <label>Odota huomiseen, jos päivän halvin jakso on yli (c/kWh)</label>
 <input id="waitv" type="number" step="0.5">
 <div class="hint">Jos kohteen halvin jakso tänään on tätä kalliimpi ja huomisen hinnat ovat halvemmat, sovellus suosittelee odottamaan huomiseen. 0 = pois käytöstä. Sama raja ohjaa varoitusta, joka näkyy, jos vähintään 4 h jaksoa tämän rajan alla ei löydy tänään eikä huomenna.</div>
+<label>Halvempi jakso, joka kannattaa odottaa (vähintään % halvempi)</label>
+<input id="pctv" type="number" min="1" max="99" step="1">
+<label>Kuinka pitkään olet valmis odottamaan (tuntia)</label>
+<input id="hzv" type="number" min="0.5" max="48" step="0.5">
+<div class="hint">Jos sähkö on nyt halpaa (kohteen keskihinta alle yllä olevan rajan), sovellus suosittelee käynnistämään heti, ellei odotusajan sisällä ala jakso, jonka keskihinta on vähintään tämän prosentin verran halvempi kuin heti aloittaessa.</div>
 
 <label>Lampun ohjaus (webhook-osoite)</label>
 <input id="hook" type="url" placeholder="https://…{hex}…">
@@ -96,7 +110,7 @@ button.sw{padding:12px 0;color:#0b1117}
 <script>
 (function(){
 var LV=[{k:'green',n:'Halpaa – hyvä hetki',c:'#22c55e'},{k:'yellow',n:'Kohtalaista',c:'#facc15'},{k:'orange',n:'Melko kallista',c:'#fb923c'},{k:'red',n:'Kallista – vältä',c:'#ef4444'}];
-var S={t1:6,t2:12,t3:20,carh:4,washh:5,wait:10,items:null,hook:'',method:'GET',body:'',auto:'1'};
+var S={t1:6,t2:12,t3:20,carh:4,washh:5,wait:10,pct:50,hz:5,items:null,hook:'',method:'GET',body:'',auto:'1'};
 try{var o=JSON.parse(localStorage.getItem('cfg'));if(o)for(var k in o)S[k]=o[k];}catch(e){}
 if(!Array.isArray(S.items))S.items=[{n:'Auton lataus',h:+S.carh||4},{n:'Pyykinpesu',h:+S.washh||5}];
 var slots=[],lastSent=null,$=function(i){return document.getElementById(i)};
@@ -128,6 +142,13 @@ function advise(F,n,d,sp){
   if(!bt){if(bm)set(3,'Odota huomiseen – halvin jakso '+rng(bm)+' (ka. '+fmt(bm.avg)+' c)');else sp.textContent='Ei tarpeeksi hintatietoa';return}
   var L=level(F[0].p),m=Math.min(k,F.length),curAvg=0,j;
   for(j=0;j<m;j++)curAvg+=F[j].p;curAvg/=m;
+  var cheap=S.wait>0?S.wait:S.t2;
+  if(curAvg<=cheap){
+    var bh=bestIn(F,k,0,Date.now()+S.hz*36e5,true,len),drop=(bh&&curAvg>0)?1-bh.avg/curAvg:0;
+    if(bh&&bh.i>0&&drop>=S.pct/100)set(1,'Odota – '+rng(bh)+' on '+Math.round(drop*100)+' % halvempaa (ka. '+fmt(bh.avg)+' vs. nyt '+fmt(curAvg)+' c)');
+    else set(0,'Käynnistä nyt – sähkö on halpaa, eikä seuraavan '+String(S.hz).replace('.',',')+' h aikana löydy '+S.pct+' % halvempaa jaksoa (ka. '+fmt(curAvg)+' c)');
+    return;
+  }
   if(S.wait>0&&bt.avg>S.wait){
     if(bm&&bm.avg<bt.avg)set(3,'Odota huomiseen – halvin jakso '+rng(bm)+' (ka. '+fmt(bm.avg)+' c). Tänään parhaimmillaan '+fmt(bt.avg)+' c');
     else if(bm)set(2,'Tänään kallista, mutta huomenna ei halvempaa. Halvin jakso tänään '+rng(bt)+' (ka. '+fmt(bt.avg)+' c)');
@@ -156,7 +177,8 @@ function render(){
     advise(F,+it.h,dot,sp);
   });
   var V=F.slice(0,96),mx=Math.max.apply(null,V.map(function(h){return h.p})),c=$('chart');c.innerHTML='';
-  V.forEach(function(h,i){var e=document.createElement('i');e.style.height=Math.max(4,h.p/mx*100)+'%';e.style.background=LV[level(h.p)].c;if(i===0)e.className='now';e.onclick=function(){$('tip').textContent=hm(h.s)+'–'+hm(h.s+len)+' · '+fmt(h.p)+' c/kWh'};c.appendChild(e)});
+  V.forEach(function(h,i){var e=document.createElement('i');e.style.height=Math.max(4,h.p/mx*100)+'%';e.style.background=LV[level(h.p)].c;c.appendChild(e)});
+  VS=V;VL=len;paintSel();
   var q=function(x){return V[Math.min(V.length-1,Math.floor(V.length*x))]};
   $('axis').innerHTML='<span>nyt</span><span>'+hm(q(.33).s)+'</span><span>'+hm(q(.66).s)+'</span><span>'+hm(V[V.length-1].s)+'</span>';
   warn(F);
@@ -170,6 +192,21 @@ function warn(F){
   if(!b||b.avg<S.wait)return;
   w.style.display='block';
   w.textContent='⚠️ Sähkö on kallista lähipäivinä: tänään ja huomenna ei löydy vähintään 4 h jaksoa, jonka keskihinta on alle '+String(S.wait).replace('.',',')+' c/kWh. Halvin 4 h jakso on '+(b.t<m1?'tänään':'huomenna')+' klo '+hm(b.t)+'–'+hm(b.t+k*len)+' (ka. '+fmt(b.avg)+' c). Vältä suurta sähkönkäyttöä, jos voit, ja odota seuraavien päivien hintoja.';
+}
+var selT=null,VS=[],VL=0;
+function paintSel(){
+  var c=$('chart'),tip=$('tip'),idx=-1,i;
+  for(i=0;i<VS.length;i++)if(VS[i].s===selT){idx=i;break}
+  if(idx<0)selT=null;
+  for(i=0;i<c.children.length;i++)c.children[i].className=(i===0?'now ':'')+(i===idx?'sel':'');
+  if(idx<0){tip.className='tip';$('tipt').textContent='Napauta tai liu’uta kuvaajaa nähdäksesi vartin hinnan';return}
+  var h=VS[idx];tip.className='tip on';$('td').style.background=LV[level(h.p)].c;
+  $('tipt').textContent=hm(h.s)+'–'+hm(h.s+VL)+' · '+fmt(h.p)+' c/kWh';
+}
+function pick(e){
+  if(!VS.length)return;
+  var r=$('chart').getBoundingClientRect(),i=Math.floor((e.clientX-r.left)/r.width*VS.length);
+  i=Math.max(0,Math.min(VS.length-1,i));selT=VS[i].s;paintSel();
 }
 function fill(s,L,p){
   var c=LV[L].c,r=parseInt(c.substr(1,2),16),g=parseInt(c.substr(3,2),16),b=parseInt(c.substr(5,2),16);
@@ -210,12 +247,12 @@ function addRow(n,h){
   x.type='button';x.textContent='✕';x.onclick=function(){r.parentNode.removeChild(r)};
   r.appendChild(a);r.appendChild(b);r.appendChild(x);$('items').appendChild(r);
 }
-function fillForm(){['t1','t2','t3'].forEach(function(k){$(k+'v').value=S[k]});$('items').innerHTML='';S.items.forEach(function(i){addRow(i.n,i.h)});$('waitv').value=S.wait;$('hook').value=S.hook;$('method').value=S.method;$('body').value=S.body;$('auto').value=S.auto}
+function fillForm(){['t1','t2','t3'].forEach(function(k){$(k+'v').value=S[k]});$('items').innerHTML='';S.items.forEach(function(i){addRow(i.n,i.h)});$('waitv').value=S.wait;$('pctv').value=S.pct;$('hzv').value=S.hz;$('hook').value=S.hook;$('method').value=S.method;$('body').value=S.body;$('auto').value=S.auto}
 $('add').onclick=function(){addRow('','')};
 $('save').onclick=function(){
   S.t1=+$('t1v').value;S.t2=+$('t2v').value;S.t3=+$('t3v').value;
   var its=[];Array.prototype.forEach.call($('items').children,function(r){var n=r.children[0].value.trim(),h=+r.children[1].value;if(n&&h>0)its.push({n:n,h:h})});
-  S.items=its;var w=parseFloat($('waitv').value);S.wait=isNaN(w)?10:w;
+  S.items=its;var w=parseFloat($('waitv').value);S.wait=isNaN(w)?10:w;var pc=parseFloat($('pctv').value);S.pct=isNaN(pc)?50:Math.min(99,Math.max(1,pc));var hh=parseFloat($('hzv').value);S.hz=isNaN(hh)?5:Math.min(48,Math.max(0.5,hh));
   S.hook=$('hook').value.trim();S.method=$('method').value;S.body=$('body').value;S.auto=$('auto').value;
   try{localStorage.setItem('cfg',JSON.stringify(S))}catch(e){}
   lastSent=null;fillForm();render();
@@ -225,6 +262,11 @@ Array.prototype.forEach.call(document.querySelectorAll('.sw'),function(b){b.oncl
 // aloituskuvake
 try{var cv=document.createElement('canvas');cv.width=cv.height=180;var x=cv.getContext('2d');x.fillStyle='#101820';x.fillRect(0,0,180,180);x.fillStyle='#22c55e';x.beginPath();x.moveTo(104,22);x.lineTo(48,100);x.lineTo(84,100);x.lineTo(70,158);x.lineTo(132,74);x.lineTo(96,74);x.closePath();x.fill();$('ico').href=cv.toDataURL('image/png')}catch(e){}
 
+var ch=$('chart'),drag=false;
+ch.addEventListener('pointerdown',function(e){drag=true;pick(e)});
+ch.addEventListener('pointermove',function(e){if(drag)pick(e)});
+['pointerup','pointercancel','pointerleave'].forEach(function(n){ch.addEventListener(n,function(){drag=false})});
+$('tipx').onclick=function(){selT=null;paintSel()};
 fillForm();
 try{slots=JSON.parse(localStorage.getItem('cache'))||[]}catch(e){}
 render();get();
