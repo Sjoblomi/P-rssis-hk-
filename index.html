@@ -31,6 +31,14 @@ h2{font-size:15px;margin:22px 4px 8px;color:var(--mut);font-weight:600}
 #chart i.sel{opacity:1;filter:brightness(1.15)}
 #chart i.sel::before{content:"";position:absolute;left:-1px;right:-1px;bottom:0;height:120px;background:rgba(255,255,255,.13);border-radius:3px;z-index:-1;pointer-events:none}
 #chart i.sel::after{content:"";position:absolute;left:50%;top:-9px;width:5px;height:5px;margin-left:-2.5px;border-radius:50%;background:#fff;box-shadow:0 0 0 2px rgba(255,255,255,.25)}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.sc{background:var(--card);border-radius:16px;padding:12px 14px;min-width:0}
+.sc h3{margin:0 0 8px;font-size:13px;font-weight:600;color:var(--mut)}
+.sc .r{display:grid;grid-template-columns:30px 1fr auto;align-items:baseline;gap:6px;margin:5px 0}
+.sc .r span{font-size:12px;color:var(--mut)}
+.sc .r b{font-size:16px;font-variant-numeric:tabular-nums}
+.sc .r em{font-size:11px;font-style:normal;color:var(--mut);font-variant-numeric:tabular-nums}
+.sc .na{font-size:12.5px;color:var(--mut);line-height:1.4}
 .tip{display:flex;align-items:center;justify-content:center;gap:8px;min-height:30px;margin-top:8px;font-size:12.5px;color:var(--mut)}
 .tip .td{display:none;width:9px;height:9px;border-radius:50%;flex:none}
 .tip.on{font-size:15px;font-weight:600;color:var(--tx)}
@@ -66,6 +74,10 @@ button.sw{padding:12px 0;color:#0b1117}
 <h2>Seuraavat 24 h (varttihinnat)</h2>
 <div class="card"><div id="chart"></div><div id="axis"></div><div class="tip" id="tip"><span class="td" id="td"></span><span id="tipt">Napauta tai liu’uta kuvaajaa nähdäksesi vartin hinnan</span><button id="tipx" type="button" aria-label="Poista valinta">✕</button></div></div>
 
+<h2>Päivän hinnat (c/kWh)</h2>
+<div class="stats" id="stats"></div>
+<div class="hint" id="mnote" style="text-align:center"></div>
+
 <div class="st" id="st"></div>
 
 <details>
@@ -76,7 +88,10 @@ button.sw{padding:12px 0;color:#0b1117}
   <input id="t2v" type="number" step="0.5" aria-label="Keltainen alle">
   <input id="t3v" type="number" step="0.5" aria-label="Oranssi alle">
 </div>
-<div class="hint">Vihreä alle 1. rajan, keltainen alle 2., oranssi alle 3., sen jälkeen punainen.</div>
+<div class="hint">Vihreä alle 1. rajan, keltainen alle 2., oranssi alle 3., sen jälkeen punainen. Rajoja verrataan hintaan, johon marginaali on lisätty.</div>
+<label>Sähköyhtiön marginaali (c/kWh)</label>
+<div class="row"><input id="margv" type="number" step="0.01" min="0" placeholder="esim. 0,59"><select id="mvat"><option value="1">sis. alv</option><option value="0">ei sis. alv (25,5 %)</option></select></div>
+<div class="hint">Marginaali lisätään pörssihintaan, ja kaikki hinnat, suositukset ja päivän tunnusluvut lasketaan sen kanssa.</div>
 <label>Seurattavat kohteet (nimi ja kesto tunteina)</label>
 <div id="items"></div>
 <button id="add" type="button">+ Lisää kohde</button>
@@ -110,7 +125,7 @@ button.sw{padding:12px 0;color:#0b1117}
 <script>
 (function(){
 var LV=[{k:'green',n:'Halpaa – hyvä hetki',c:'#22c55e'},{k:'yellow',n:'Kohtalaista',c:'#facc15'},{k:'orange',n:'Melko kallista',c:'#fb923c'},{k:'red',n:'Kallista – vältä',c:'#ef4444'}];
-var S={t1:6,t2:12,t3:20,carh:4,washh:5,wait:10,pct:50,hz:5,items:null,hook:'',method:'GET',body:'',auto:'1'};
+var S={t1:6,t2:12,t3:20,carh:4,washh:5,wait:10,pct:50,hz:5,margin:0,mvat:'1',items:null,hook:'',method:'GET',body:'',auto:'1'};
 try{var o=JSON.parse(localStorage.getItem('cfg'));if(o)for(var k in o)S[k]=o[k];}catch(e){}
 if(!Array.isArray(S.items))S.items=[{n:'Auton lataus',h:+S.carh||4},{n:'Pyykinpesu',h:+S.washh||5}];
 var slots=[],lastSent=null,$=function(i){return document.getElementById(i)};
@@ -181,6 +196,7 @@ function render(){
   VS=V;VL=len;paintSel();
   var q=function(x){return V[Math.min(V.length-1,Math.floor(V.length*x))]};
   $('axis').innerHTML='<span>nyt</span><span>'+hm(q(.33).s)+'</span><span>'+hm(q(.66).s)+'</span><span>'+hm(V[V.length-1].s)+'</span>';
+  renderStats();
   warn(F);
   lamp(L,false,p);
 }
@@ -192,6 +208,36 @@ function warn(F){
   if(!b||b.avg<S.wait)return;
   w.style.display='block';
   w.textContent='⚠️ Sähkö on kallista lähipäivinä: tänään ja huomenna ei löydy vähintään 4 h jaksoa, jonka keskihinta on alle '+String(S.wait).replace('.',',')+' c/kWh. Halvin 4 h jakso on '+(b.t<m1?'tänään':'huomenna')+' klo '+hm(b.t)+'–'+hm(b.t+k*len)+' (ka. '+fmt(b.avg)+' c). Vältä suurta sähkönkäyttöä, jos voit, ja odota seuraavien päivien hintoja.';
+}
+function marg(){var m=parseFloat(S.margin);if(isNaN(m)||m<0)m=0;return S.mvat==='1'?m:m*1.255}
+function applyMargin(){var m=marg();slots.forEach(function(x){if(x.r===undefined)x.r=x.p;x.p=x.r+m})}
+function dayStats(off){
+  var x=new Date(),y=x.getFullYear(),mo=x.getMonth(),d=x.getDate();
+  var d0=new Date(y,mo,d+off).getTime(),d1=new Date(y,mo,d+off+1).getTime();
+  var a=slots.filter(function(v){return v.s>=d0&&v.s<d1});
+  if(!a.length)return null;
+  var L=slots.length>1?Math.max(6e4,Math.round((slots[1].s-slots[0].s)/6e4)*6e4):9e5;
+  var mn=a[0],mx=a[0],sum=0;
+  a.forEach(function(v){if(v.p<mn.p)mn=v;if(v.p>mx.p)mx=v;sum+=v.p});
+  return {mn:mn,mx:mx,avg:sum/a.length,ok:a.length*L>=20*36e5,date:new Date(d0)};
+}
+function statCard(title,st,na){
+  var c=el('div','sc'),h=el('h3');h.textContent=title;c.appendChild(h);
+  if(!st||!st.ok){var m=el('div','na');m.textContent=na;c.appendChild(m);return c}
+  [['Alin',st.mn.p,hm(st.mn.s)],['Ylin',st.mx.p,hm(st.mx.s)],['Ka.',st.avg,'']].forEach(function(r){
+    var row=el('div','r'),a=el('span'),b=el('b'),t=el('em');
+    a.textContent=r[0];b.textContent=fmt(r[1]);b.style.color=LV[level(r[1])].c;t.textContent=r[2];
+    row.appendChild(a);row.appendChild(b);row.appendChild(t);c.appendChild(row);
+  });
+  return c;
+}
+function renderStats(){
+  var box=$('stats');box.innerHTML='';
+  var dl=function(st){return st?' '+st.date.getDate()+'.'+(st.date.getMonth()+1)+'.':''};
+  var t0=dayStats(0),t1=dayStats(1);
+  box.appendChild(statCard('Tänään'+dl(t0),t0,'Ei hintatietoja'));
+  box.appendChild(statCard('Huomenna'+dl(t1),t1,'Hinnat julkaistaan yleensä iltapäivällä'));
+  var m=marg();$('mnote').textContent=m>0?'Hinnat sisältävät marginaalin '+fmt(m)+' c/kWh':'';
 }
 var selT=null,VS=[],VL=0;
 function paintSel(){
@@ -222,7 +268,7 @@ function lamp(L,force,p){
 }
 var SRC=['https://api.porssisahko.net/v2/latest-prices.json','https://porssisahkovahti.fi/api/v1/latest-prices.json','https://api.porssisahko.net/v1/latest-prices.json'];
 function fail(errs){
-  if(!slots.length){try{slots=JSON.parse(localStorage.getItem('cache'))||[]}catch(e){}}
+  if(!slots.length){try{slots=JSON.parse(localStorage.getItem('cache'))||[];applyMargin()}catch(e){}}
   $('st').textContent=slots.length?'Ei yhteyttä – näytetään viimeksi tallennetut hinnat':'Hintojen haku epäonnistui. '+errs.join(' | ');
   try{render()}catch(e){}
 }
@@ -232,7 +278,7 @@ function tryGet(i,errs){
   .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
   .then(function(j){
     if(!j||!j.prices||!j.prices.length)throw new Error('tyhjä vastaus');
-    slots=j.prices.map(function(p){return {s:new Date(p.startDate).getTime(),e:new Date(p.endDate).getTime(),p:+p.price}}).sort(function(a,b){return a.s-b.s});
+    slots=j.prices.map(function(p){return {s:new Date(p.startDate).getTime(),e:new Date(p.endDate).getTime(),r:+p.price,p:+p.price}}).sort(function(a,b){return a.s-b.s});applyMargin();
     try{localStorage.setItem('cache',JSON.stringify(slots))}catch(e){}
     $('st').textContent='Hinnat päivitetty klo '+hm(Date.now())+' · lähde '+SRC[i].split('/').slice(2,4).join('/');
     try{render()}catch(e){$('st').textContent='Näyttövirhe: '+e.message}
@@ -247,15 +293,15 @@ function addRow(n,h){
   x.type='button';x.textContent='✕';x.onclick=function(){r.parentNode.removeChild(r)};
   r.appendChild(a);r.appendChild(b);r.appendChild(x);$('items').appendChild(r);
 }
-function fillForm(){['t1','t2','t3'].forEach(function(k){$(k+'v').value=S[k]});$('items').innerHTML='';S.items.forEach(function(i){addRow(i.n,i.h)});$('waitv').value=S.wait;$('pctv').value=S.pct;$('hzv').value=S.hz;$('hook').value=S.hook;$('method').value=S.method;$('body').value=S.body;$('auto').value=S.auto}
+function fillForm(){['t1','t2','t3'].forEach(function(k){$(k+'v').value=S[k]});$('items').innerHTML='';S.items.forEach(function(i){addRow(i.n,i.h)});$('waitv').value=S.wait;$('pctv').value=S.pct;$('hzv').value=S.hz;$('margv').value=S.margin||'';$('mvat').value=S.mvat;$('hook').value=S.hook;$('method').value=S.method;$('body').value=S.body;$('auto').value=S.auto}
 $('add').onclick=function(){addRow('','')};
 $('save').onclick=function(){
   S.t1=+$('t1v').value;S.t2=+$('t2v').value;S.t3=+$('t3v').value;
   var its=[];Array.prototype.forEach.call($('items').children,function(r){var n=r.children[0].value.trim(),h=+r.children[1].value;if(n&&h>0)its.push({n:n,h:h})});
-  S.items=its;var w=parseFloat($('waitv').value);S.wait=isNaN(w)?10:w;var pc=parseFloat($('pctv').value);S.pct=isNaN(pc)?50:Math.min(99,Math.max(1,pc));var hh=parseFloat($('hzv').value);S.hz=isNaN(hh)?5:Math.min(48,Math.max(0.5,hh));
+  S.items=its;var w=parseFloat($('waitv').value);S.wait=isNaN(w)?10:w;var pc=parseFloat($('pctv').value);S.pct=isNaN(pc)?50:Math.min(99,Math.max(1,pc));var hh=parseFloat($('hzv').value);S.hz=isNaN(hh)?5:Math.min(48,Math.max(0.5,hh));var mg=parseFloat(String($('margv').value).replace(',','.'));S.margin=isNaN(mg)||mg<0?0:mg;S.mvat=$('mvat').value;
   S.hook=$('hook').value.trim();S.method=$('method').value;S.body=$('body').value;S.auto=$('auto').value;
   try{localStorage.setItem('cfg',JSON.stringify(S))}catch(e){}
-  lastSent=null;fillForm();render();
+  lastSent=null;fillForm();applyMargin();render();
 };
 Array.prototype.forEach.call(document.querySelectorAll('.sw'),function(b){b.onclick=function(){lamp(+b.getAttribute('data-t'),true)}});
 
@@ -268,7 +314,7 @@ ch.addEventListener('pointermove',function(e){if(drag)pick(e)});
 ['pointerup','pointercancel','pointerleave'].forEach(function(n){ch.addEventListener(n,function(){drag=false})});
 $('tipx').onclick=function(){selT=null;paintSel()};
 fillForm();
-try{slots=JSON.parse(localStorage.getItem('cache'))||[]}catch(e){}
+try{slots=JSON.parse(localStorage.getItem('cache'))||[];applyMargin()}catch(e){}
 render();get();
 setInterval(render,30000);
 setInterval(get,20*60000);
